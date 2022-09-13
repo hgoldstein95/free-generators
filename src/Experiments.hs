@@ -23,7 +23,6 @@ import Examples
   ( Class (Class),
     HasStats (..),
     genAVLSkeleton,
-    genConfig,
     genExpr,
     genList,
     genT,
@@ -31,7 +30,6 @@ import Examples
     hasType,
     isAVL,
     isBST,
-    isConfig,
     isSorted,
     mergeFreqs,
     sumLeavesMul3,
@@ -123,9 +121,6 @@ avl = Experiment "AVL" genAVLSkeleton 500 isAVL
 stlc :: Experiment
 stlc = Experiment "STLC" genExpr 400 hasType
 
-config :: Experiment
-config = Experiment "CONFIG" genConfig 50 isConfig
-
 div3 :: Experiment
 div3 = Experiment "DIV3" genT 1 sumLeavesMul3
 
@@ -159,7 +154,12 @@ main = do
 
     printStats tag m = do
       putStr $ tag ++ ": "
-      distStats <- mapM (distanceStats 5000) . Map.fromListWith (++) . map (\x -> (sizeFn x, [x])) . Map.keys $ m
+      distStats <-
+        mapM (distanceStats 5000)
+          . Map.fromListWith (++)
+          . map (\x -> (sizeFn x, [x]))
+          . Map.keys
+          $ m
       let sizeStats = stats . map sizeFn . Map.keys $ m
       subtreeStats <- uniqueSubtreeStats 100 . Map.keys $ m
       putStrLn
@@ -168,7 +168,11 @@ main = do
             ++ ",avg_size="
             ++ showStats sizeStats
             ++ ",avg_dist="
-            ++ concatMap (\(i, d) -> show i ++ "," ++ showDouble d ++ "\n") (Map.toList (fst <$> distStats))
+            ++ concatMap
+              ( \(i, d) ->
+                  show i ++ "," ++ showDouble d ++ "\n"
+              )
+              (Map.toList (fst <$> distStats))
             ++ ",subtree_uniqueness="
             ++ showStats subtreeStats
         )

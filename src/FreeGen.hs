@@ -61,10 +61,6 @@ instance Monad (FFree g) where
   Return x >>= k = k x
   Bind u k' >>= k = Bind u (\x -> k' x >>= k)
 
-interp :: Monad m => (forall b. f b -> m b) -> FFree f a -> m a
-interp _ (Return a) = pure a
-interp f (Bind x g) = f x >>= interp f . g
-
 data FPick a where
   Pick :: [(Weight, Choice, FFree FPick a)] -> FPick a
 
@@ -123,6 +119,7 @@ toGen (Bind (Pick xs) f) = do
   a <- toGen g
   toGen (f a)
 
+-- | Partial version of `toGen`.
 toGen' :: FreeGen a -> Gen a
 toGen' =
   interp
@@ -130,6 +127,10 @@ toGen' =
         Pick [] -> error "toGen': Not defined on Void"
         Pick xs -> Gen.oneof (toGen' . view _3 <$> xs)
     )
+  where
+    interp :: Monad m => (forall b. f b -> m b) -> FFree f a -> m a
+    interp _ (Return a) = pure a
+    interp f (Bind x g) = f x >>= interp f . g
 
 toParser :: FreeGen a -> Choices -> Maybe (a, Choices)
 toParser (Return a) = \s -> Just (a, s)
@@ -203,6 +204,9 @@ instance Derivative (FreeGen a) where
 
 instance Generate FreeGen where
   gen Void = pure Nothing
+  -- NOTE: This is slightly different from the implementation in the paper. In particular,
+  -- we found that explicitly dealing with `Maybe` (rather than just writing partial generators)
+  -- was slightly more expensive.
   gen g = Just <$> toGen' g -- runGenBot (toGen g)
 
 instance DerivGen FreeGen
