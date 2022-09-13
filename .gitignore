@@ -1,0 +1,7 @@
+.stack-work/
+*~
+dist-newstyle/*
+*.dat
+*.dat.latest
+*.csv
+*.png
