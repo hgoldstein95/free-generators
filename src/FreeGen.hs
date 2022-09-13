@@ -44,6 +44,8 @@ type Set = HashSet
 ----------------------------------------------------------------------------------------------------
 -- Type Definition
 ----------------------------------------------------------------------------------------------------
+
+-- | The "Freer monad" interface.
 data FFree f a where
   Return :: a -> FFree f a
   Bind :: f a -> (a -> FFree f b) -> FFree f b
@@ -61,22 +63,18 @@ instance Monad (FFree g) where
   Return x >>= k = k x
   Bind u k' >>= k = Bind u (\x -> k' x >>= k)
 
+-- | A functor representing weighted choices.
 data FPick a where
   Pick :: [(Weight, Choice, FFree FPick a)] -> FPick a
 
+-- | The type of free generators; the freer monad over the `Pick` functor.
+type FreeGen = FFree FPick
+
+-- | A pattern to capture a _definitely_ empty generator.
 pattern Void :: FFree FPick a
 pattern Void <- Bind (Pick []) _
 
-type FreeGen = FFree FPick
-
-language :: FreeGen a -> [Choices]
-language (Return _) = [[]]
-language Void = []
-language (Bind (Pick xs) f) = do
-  (_, c, x) <- xs
-  s <- language (x >>= f)
-  pure (c : s)
-
+-- | A smart constructor for `pick`.
 instance Pick FreeGen where
   pick xs =
     case filter (\(_, _, x) -> not (isVoid x)) xs of
@@ -85,32 +83,24 @@ instance Pick FreeGen where
           error "pick: Frequency cannot have duplicate choice labels"
       xs' -> Bind (Pick xs') Return
 
+-- | A smart constructor for `void`.
 void :: FreeGen a
 void = Bind (Pick []) Return
 
-newtype GenBot a = GenBot {runGenBot :: Gen (Maybe a)}
+----------------------------------------------------------------------------------------------------
+-- Interpretations
+----------------------------------------------------------------------------------------------------
 
-instance Functor GenBot where
-  fmap f = (>>= return . f)
+-- | The language interpretation of a free generator.
+language :: FreeGen a -> [Choices]
+language (Return _) = [[]]
+language Void = []
+language (Bind (Pick xs) f) = do
+  (_, c, x) <- xs
+  s <- language (x >>= f)
+  pure (c : s)
 
-instance Applicative GenBot where
-  pure = return
-  (<*>) = ap
-
-instance Monad GenBot where
-  return = GenBot . pure . Just
-  x >>= f = GenBot $ do
-    a <- runGenBot x
-    case a of
-      Just a' -> runGenBot (f a')
-      Nothing -> return Nothing
-
-bot :: GenBot a
-bot = GenBot (return Nothing)
-
-frequencyBot :: [(Weight, GenBot a)] -> GenBot a
-frequencyBot xs = GenBot (Gen.frequency (map (bimap (fromInteger . toInt) runGenBot) xs))
-
+-- | The random generator interpretation of a free generator.
 toGen :: FreeGen a -> GenBot a
 toGen (Return a) = return a
 toGen Void = bot
@@ -132,6 +122,7 @@ toGen' =
     interp _ (Return a) = pure a
     interp f (Bind x g) = f x >>= interp f . g
 
+-- | The parser interpretation of a free generator.
 toParser :: FreeGen a -> Choices -> Maybe (a, Choices)
 toParser (Return a) = \s -> Just (a, s)
 toParser Void = const Nothing
@@ -141,47 +132,7 @@ toParser (Bind (Pick xs) f) = \case
     (x, s') <- (`toParser` s) . view _3 =<< find ((== c) . view _2) xs
     toParser (f x) s'
 
-newtype Parser a = Parser {parse :: Choices -> Maybe (a, Choices)}
-
-instance Functor Parser where
-  fmap f x = Parser (fmap (first f) . parse x)
-
-instance Applicative Parser where
-  pure = return
-  (<*>) = ap
-
-instance Monad Parser where
-  return a = Parser (const (Just (a, [])))
-  x >>= f = Parser $ \s -> do
-    (a, s') <- parse x s
-    parse (f a) s'
-
-consume :: Parser Choice
-consume = Parser $ \case
-  [] -> Nothing
-  (c : s) -> Just (c, s)
-
-toParser' :: FreeGen a -> Parser a
-toParser' (Return a) = return a
-toParser' Void = Parser (const Nothing)
-toParser' (Bind (Pick xs) f) = do
-  c <- consume
-  x <- case find ((== c) . view _2) xs of
-    Just (_, _, x) -> return x
-    Nothing -> Parser (const Nothing)
-  a <- toParser' x
-  toParser' (f a)
-
-choice :: [(Choice, a)] -> Parser a
-choice xs = consume >>= \c -> search (== c) xs
-
-search :: (a -> Bool) -> [(a, b)] -> Parser b
-search p xs = Parser $ \s ->
-  (,s) . snd <$> find (p . fst) xs
-
-maybeToParser :: Maybe (Choice, a) -> Parser a
-maybeToParser = error "not implemented"
-
+-- | The choice distribution interpretation of a free generator.
 toChoices :: FreeGen a -> GenBot Choices
 toChoices (Return _) = pure []
 toChoices Void = bot
@@ -189,6 +140,10 @@ toChoices (Bind (Pick xs) f) = do
   (c, g) <- frequencyBot (map (\(w, c, x) -> (w, return (c, x))) xs)
   s <- toChoices (g >>= f)
   pure (c : s)
+
+----------------------------------------------------------------------------------------------------
+-- Derivatives
+----------------------------------------------------------------------------------------------------
 
 instance Nullable (FFree g) where
   nu (Return a) = [a]
@@ -229,10 +184,50 @@ hasDuplicates = any ((> 1) . length) . group
 filterG :: (a -> Bool) -> Gen (Maybe a) -> Gen (Maybe a)
 filterG valid g = ((\a -> if valid a then Just a else Nothing) =<<) <$> g
 
+newtype GenBot a = GenBot {runGenBot :: Gen (Maybe a)}
+
+instance Functor GenBot where
+  fmap f = (>>= return . f)
+
+instance Applicative GenBot where
+  pure = return
+  (<*>) = ap
+
+instance Monad GenBot where
+  return = GenBot . pure . Just
+  x >>= f = GenBot $ do
+    a <- runGenBot x
+    case a of
+      Just a' -> runGenBot (f a')
+      Nothing -> return Nothing
+
+bot :: GenBot a
+bot = GenBot (return Nothing)
+
+frequencyBot :: [(Weight, GenBot a)] -> GenBot a
+frequencyBot xs = GenBot (Gen.frequency (map (bimap (fromInteger . toInt) runGenBot) xs))
+
+newtype Parser a = Parser {parse :: Choices -> Maybe (a, Choices)}
+
+instance Functor Parser where
+  fmap f x = Parser (fmap (first f) . parse x)
+
+instance Applicative Parser where
+  pure = return
+  (<*>) = ap
+
+instance Monad Parser where
+  return a = Parser (const (Just (a, [])))
+  x >>= f = Parser $ \s -> do
+    (a, s') <- parse x s
+    parse (f a) s'
+
+----------------------------------------------------------------------------------------------------
+-- Informal Proofs
+----------------------------------------------------------------------------------------------------
+
 (===) :: a -> a -> a
 (===) = error "not implemented"
-
---
 
 lemma1 :: String -> (a -> b) -> FreeGen a -> FreeGen b
 lemma1 c f x =
